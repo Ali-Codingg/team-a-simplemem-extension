@@ -6,6 +6,7 @@
 __pycache__/
 *.pyc
 .venv/
+uv.lock
 venv/
 *.egg-info/
 .pytest_cache/

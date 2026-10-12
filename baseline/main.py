@@ -2,6 +2,9 @@
 SimpleMem - Efficient Lifelong Memory for LLM Agents
 Main system class integrating all components
 """
+from dotenv import load_dotenv
+load_dotenv()
+
 from typing import List, Optional
 from simplemem.core.models.memory_entry import Dialogue, MemoryEntry
 from simplemem.core.utils.llm_client import LLMClient
