@@ -103,7 +103,6 @@ def main():
         system.hybrid_retriever = LayaRetriever(
             llm_client=system.llm_client,
             vector_store=system.vector_store,
-            strategy=args.strategy,
         )
 
         class ExistingMemoryTester(evaluator.LoCoMoTester):
