@@ -213,7 +213,15 @@ class LanceDBVectorStoreBackend:
         if not keywords or self.count() == 0:
             return []
 
-        query = " ".join(keywords)
+        query = " ".join(
+    re.findall(
+        r"\w+",
+        re.sub(r"(?i)(?<=\w)['’]s\b", "", " ".join(keywords))
+    )
+)
+
+        if not query:
+         return []
         results = self._rows_to_results(
             self.table.search(query).limit(top_k).to_list(),
             score_field="_score",
