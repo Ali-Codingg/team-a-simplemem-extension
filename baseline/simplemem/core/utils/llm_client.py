@@ -5,6 +5,8 @@ import json
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
 from simplemem.core.settings import settings as config
+import time
+from simplemem.core.utils.tracing import record_call
 
 
 class LLMClient:
@@ -80,12 +82,21 @@ class LLMClient:
         for attempt in range(max_retries):
             try:
                 # Use streaming if configured
+                t0 = time.perf_counter()
                 if self.use_streaming:
                     kwargs["stream"] = True
-                    return self._handle_streaming_response(**kwargs)
+                    kwargs["stream_options"] = {"include_usage": True}
+                    text, usage = self._handle_streaming_response(**kwargs)
                 else:
                     response = self.client.chat.completions.create(**kwargs)
-                    return response.choices[0].message.content
+                    text = response.choices[0].message.content
+                    usage = response.usage
+                record_call(
+                    usage.prompt_tokens if usage else 0,
+                    usage.completion_tokens if usage else 0,
+                    time.perf_counter() - t0,
+                )
+                return text
                 
                 # kwargs["stream"] = True
                 # return self._handle_streaming_response(**kwargs)
@@ -94,7 +105,6 @@ class LLMClient:
                 # print(e)
                 last_exception = e
                 if attempt < max_retries - 1:
-                    import time
                     wait_time = (2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
                     print(f"LLM API call failed (attempt {attempt + 1}/{max_retries}): {e}")
                     print(f"Retrying in {wait_time} seconds...")
@@ -105,31 +115,16 @@ class LLMClient:
         # If all retries failed, raise the last exception
         raise last_exception
 
-    def _handle_streaming_response(self, **kwargs) -> str:
-        """
-        Handle streaming response and collect full content
-        """
+    def _handle_streaming_response(self, **kwargs):
         full_content = []
+        usage = None
         stream = self.client.chat.completions.create(**kwargs)
-
-        # for chunk in stream:
-        #     if chunk.choices is not None:
-        #         print(chunk.choices[0].delta.content)
-        
-        # print('---------')
-
         for chunk in stream:
-            # print(chunk)
-            # fix list index out of range
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
             if len(chunk.choices) > 0 and chunk.choices[0].delta.content is not None:
-                content = chunk.choices[0].delta.content
-                full_content.append(content)
-                # print(full_content)
-                # Optional: print streaming content in real-time
-                # print(content, end='', flush=True)
-        # print(full_content)
-        print()
-        return ''.join(full_content)
+                full_content.append(chunk.choices[0].delta.content)
+        return ''.join(full_content), usage
 
     def extract_json(self, text: str) -> Any:
         """
