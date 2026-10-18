@@ -15,6 +15,7 @@ import re
 from datetime import datetime, timedelta
 import dateparser
 import concurrent.futures
+from simplemem.core.utils.tracing import stage
 
 
 class HybridRetriever:
@@ -83,33 +84,41 @@ class HybridRetriever:
         print(f"\n[Planning] Analyzing information requirements for: {query}")
         
         # Step 1: Intelligent analysis of what information is needed
-        information_plan = self._analyze_information_requirements(query)
+        with stage("plan"):
+            information_plan = self._analyze_information_requirements(query)
         print(f"[Planning] Identified {len(information_plan['required_info'])} information requirements")
         
         # Step 2: Generate minimal necessary queries based on the plan
-        search_queries = self._generate_targeted_queries(query, information_plan)
+        with stage("plan"):
+            search_queries = self._generate_targeted_queries(query, information_plan)
         print(f"[Planning] Generated {len(search_queries)} targeted queries")
         
         # Step 3: Execute searches for all queries (parallel or sequential)
-        if self.enable_parallel_retrieval and len(search_queries) > 1:
-            all_results = self._execute_parallel_searches(search_queries)
-        else:
-            all_results = []
-            for i, search_query in enumerate(search_queries, 1):
-                print(f"[Search {i}] {search_query}")
-                results = self._semantic_search(search_query)
-                all_results.extend(results)
+        # Note: threads started inside a stage block do not inherit it unless the context is copied;
+        # the semantic search makes no LLM call, so only timing is affected.
+        with stage("search"):
+            if self.enable_parallel_retrieval and len(search_queries) > 1:
+                all_results = self._execute_parallel_searches(search_queries)
+            else:
+                all_results = []
+                for i, search_query in enumerate(search_queries, 1):
+                    print(f"[Search {i}] {search_query}")
+                    results = self._semantic_search(search_query)
+                    all_results.extend(results)
 
         # Step 3.5: Execute keyword and structured searches (hybrid retrieval)
-        query_analysis = self._analyze_query(query)
+        with stage("analyze_query"):
+            query_analysis = self._analyze_query(query)
 
         # Keyword search (Lexical Layer)
-        keyword_results = self._keyword_search(query, query_analysis)
+        with stage("search"):
+            keyword_results = self._keyword_search(query, query_analysis)
         print(f"[Keyword Search] Found {len(keyword_results)} results")
         all_results.extend(keyword_results)
 
         # Structured search (Symbolic Layer)
-        structured_results = self._structured_search(query_analysis)
+        with stage("search"):
+            structured_results = self._structured_search(query_analysis)
         print(f"[Structured Search] Found {len(structured_results)} results")
         all_results.extend(structured_results)
 
@@ -122,7 +131,8 @@ class HybridRetriever:
         should_use_reflection = enable_reflection if enable_reflection is not None else self.enable_reflection
         
         if should_use_reflection:
-            merged_results = self._retrieve_with_intelligent_reflection(query, merged_results, information_plan)
+            with stage("reflect"):
+                merged_results = self._retrieve_with_intelligent_reflection(query, merged_results, information_plan)
         
         return merged_results
     

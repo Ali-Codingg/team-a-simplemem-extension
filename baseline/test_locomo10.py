@@ -18,6 +18,8 @@ from rouge_score import rouge_scorer
 from bert_score import score as bert_score
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import pytorch_cos_sim
+import os
+from simplemem.core.utils.tracing import trace_question, stage
 
 from main import SimpleMemSystem
 from simplemem.core.models.memory_entry import Dialogue
@@ -36,7 +38,39 @@ except Exception as e:
     print(f"Warning: Could not load SentenceTransformer model: {e}")
     sentence_model = None
 
+# ---- 1) Add this helper near the top of testlocomo10.py (after the imports) ----
+def build_token_summary(rows):
+    """Total token cost over all questions. Judge calls are reported separately,
+    because they are evaluation cost, not system cost."""
+    by_stage = {}
+    for r in rows:
+        for c in r.get("calls", []):
+            d = by_stage.setdefault(c["stage"], {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0})
+            d["calls"] += 1
+            d["prompt_tokens"] += c.get("prompt") or 0
+            d["completion_tokens"] += c.get("completion") or 0
+    for d in by_stage.values():
+        d["total_tokens"] = d["prompt_tokens"] + d["completion_tokens"]
 
+    sys_stages = [s for s in by_stage if s != "judge"]
+    p = sum(by_stage[s]["prompt_tokens"] for s in sys_stages)
+    c = sum(by_stage[s]["completion_tokens"] for s in sys_stages)
+    n = sum(by_stage[s]["calls"] for s in sys_stages)
+    q = max(len(rows), 1)
+    judge = by_stage.get("judge", {"calls": 0, "total_tokens": 0})
+    return {
+        "system_prompt_tokens": p,
+        "system_completion_tokens": c,
+        "system_total_tokens": p + c,
+        "system_llm_calls": n,
+        "avg_tokens_per_question": round((p + c) / q, 1),
+        "avg_llm_calls_per_question": round(n / q, 2),
+        "judge_total_tokens_excluded": judge["total_tokens"],
+        "by_stage": by_stage,
+    }
+
+
+    
 # ============================================================================
 # Data Structures for LoComo10 Dataset
 # ============================================================================
@@ -855,14 +889,25 @@ Return ONLY the JSON, no other text.
                 sample_results.append(results_dict[qa_idx])
         
         return sample_results
-    
+
     def _process_single_question(self, qa, qa_idx: int):
+        """Wrapper: collects per-question trace (tokens, LLM calls, stage times)."""
+        with trace_question() as t:
+            result = self._process_single_question_inner(qa, qa_idx)
+        sys_calls = [c for c in t.calls if c['stage'] != 'judge']
+        result['calls'] = t.calls
+        result['stages'] = t.stages
+        result['prompt_tokens'] = sum(c['prompt'] for c in sys_calls)
+        result['completion_tokens'] = sum(c['completion'] for c in sys_calls)
+        result['num_llm_calls'] = len(sys_calls)
+        return result
+
+    def _process_single_question_inner(self, qa, qa_idx: int):
         """Process a single question and return result"""
         question = qa.question
         category = qa.category if qa.category is not None else 0
 
         # For category 5, the ground truth is always "Not mentioned in the conversation"
-        # For other categories, use qa.final_answer
         if category == 5:
             reference_answer = "Not mentioned in the conversation"
         else:
@@ -871,7 +916,7 @@ Return ONLY the JSON, no other text.
         print(f"\n[Q{qa_idx+1}] Category {category}: {question}")
 
         # Measure retrieval time
-        # For category 5 (adversarial), disable reflection since "no answer means no answer"
+        # For category 5 (adversarial), disable reflection
         retrieval_start = time.time()
         if category == 5:
             contexts = self.system.hybrid_retriever.retrieve(question, enable_reflection=False)
@@ -881,27 +926,26 @@ Return ONLY the JSON, no other text.
 
         # Measure answer generation time
         answer_start = time.time()
-
-        # Use special answer generation for category 5
-        if category == 5:
-            adversarial_answer = qa.adversarial_answer if qa.adversarial_answer else "Unknown answer"
-            answer = self.generate_category5_answer(question, contexts, adversarial_answer)
-        else:
-            answer = self.system.answer_generator.generate_answer(question, contexts)
-
+        with stage("answer"):
+            if category == 5:
+                adversarial_answer = qa.adversarial_answer if qa.adversarial_answer else "Unknown answer"
+                answer = self.generate_category5_answer(question, contexts, adversarial_answer)
+            else:
+                answer = self.system.answer_generator.generate_answer(question, contexts)
         answer_time = time.time() - answer_start
 
         total_time = retrieval_time + answer_time
 
-        # Calculate metrics
+        # Calculate metrics (tagged "judge" so it is not counted as system cost)
         if reference_answer:
-            metrics = calculate_metrics(
-                answer, 
-                reference_answer, 
-                question=question,
-                judge_client=self.judge_client,
-                use_llm_judge=self.use_llm_judge
-            )
+            with stage("judge"):
+                metrics = calculate_metrics(
+                    answer,
+                    reference_answer,
+                    question=question,
+                    judge_client=self.judge_client,
+                    use_llm_judge=self.use_llm_judge
+                )
         else:
             metrics = {}
 
@@ -976,6 +1020,14 @@ Return ONLY the JSON, no other text.
         print(f"  Total retrieval time: {sum(self.retrieval_times):.2f}s")
         print(f"  Total answer time: {sum(self.answer_times):.2f}s")
 
+        # ---- 2) In run_test, right after the "Timing Statistics" prints, add: ----
+        token_summary = build_token_summary(all_results)
+        print("\nToken Cost (system only, judge excluded):")
+        print(f"  Total tokens: {token_summary['system_total_tokens']:,} "
+              f"(prompt {token_summary['system_prompt_tokens']:,}, completion {token_summary['system_completion_tokens']:,})")
+        print(f"  Avg tokens per question: {token_summary['avg_tokens_per_question']:,}")
+        print(f"  Avg LLM calls per question: {token_summary['avg_llm_calls_per_question']}")
+
         # Answer quality metrics
         if self.metrics_list:
             print(f"\nAnswer Quality Metrics:")
@@ -1009,6 +1061,7 @@ Return ONLY the JSON, no other text.
             output_file = result_file
             with open(output_file, 'w') as f:
                 json.dump({
+                    'token_summary': token_summary,
                     'summary': {
                         'num_samples': total_samples,
                         'num_questions': len(all_results),

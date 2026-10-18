@@ -1,12 +1,15 @@
-# Core, every team needs these regardless of topic or paper.
-python-dotenv>=1.0
-pytest>=8.0
-
-# Everything else depends on which paper your team is extending, and
-# belongs here once you know it, not guessed in advance by this template.
-# Add your chosen baseline repo's own dependencies below this line, or
-# pull them in however that repo's own setup instructions say to
-# (a separate requirements file, a pyproject extra, a conda environment).
-# Two examples of what teams have added past this line in prior terms:
-#   google-genai>=2.3.0   # Gemini access, this course's own lecture default
-#   mem0ai>=0.1           # a Memory-topic team building on Mem0
+numpy==2.2.6
+openai==2.3.0
+sentence-transformers==5.1.1
+pyarrow==22.0.0
+lancedb==0.25.3
+dateparser==1.2.2
+pydantic==2.12.0
+tqdm==4.67.1
+nltk==3.9.2
+rouge_score==0.1.2
+bert-score==0.3.13
+python-dotenv==1.2.1
+tantivy
+laya
+rank-bm25
