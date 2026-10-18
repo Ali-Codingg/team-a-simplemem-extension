@@ -28,3 +28,6 @@ data/*
 .claude/
 CLAUDE.md
 CLAUDE.local.md
+
+
+extension/jev/.env
