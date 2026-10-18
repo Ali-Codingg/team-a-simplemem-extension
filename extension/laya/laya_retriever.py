@@ -250,4 +250,10 @@ class LayaRetriever:
         diag["num_before_cap"] = len(unique)
         unique = unique[: self.max_total]
         diag["num_unique"] = len(unique)
+
+        print("Complexity:", diag["budget"]["complexity"])
+        print("Budget:", diag["budget"])
+        print("Returned by methods:", diag["retrieval_counts"])
+        print("Unique memories:", diag["num_unique"])
+        print("Errors:", diag["retrieval_errors"])
         return unique
